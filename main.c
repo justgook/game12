@@ -11,7 +11,7 @@ static struct {
   sg_pass_action pass_action;
 } state;
 
-static void init(void) {
+void init(void) {
   float vertices[] = {0.0f,  0.5f,  0.5f, 1.0f, 0.0f, 0.0f, 1.0f,
                       0.5f,  -0.5f, 0.5f, 0.0f, 1.0f, 0.0f, 1.0f,
                       -0.5f, -0.5f, 0.5f, 0.0f, 0.0f, 1.0f, 1.0f};
@@ -43,4 +43,4 @@ void frame(void) {
 }
 
 void cleanup(void) { sg_shutdown(); }
-static void event(const sapp_event *e) {}
+void event(const sapp_event *e) {}
