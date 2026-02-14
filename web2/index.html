@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sokol GFX WebGL2 Renderer</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            background: #1a1a1a;
+            color: #fff;
+            font-family: Arial, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        canvas {
+            border: 2px solid #444;
+            background: #000;
+        }
+        #info {
+            margin-top: 20px;
+            padding: 10px;
+            background: #333;
+            border-radius: 5px;
+            font-family: monospace;
+            font-size: 14px;
+            max-width: 800px;
+            overflow-x: auto;
+        }
+        .status {
+            margin-top: 10px;
+            padding: 10px;
+            border-radius: 5px;
+        }
+        .status.success { background: #2d5a2d; }
+        .status.error { background: #5a2d2d; }
+        .status.info { background: #2d3d5a; }
+        #controls {
+            margin-top: 10px;
+        }
+        button {
+            padding: 8px 16px;
+            margin: 0 5px;
+            background: #444;
+            color: #fff;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        button:hover {
+            background: #555;
+        }
+        #debug {
+            margin-top: 10px;
+            padding: 10px;
+            background: #222;
+            border-radius: 5px;
+            font-family: monospace;
+            font-size: 12px;
+            max-width: 800px;
+            max-height: 200px;
+            overflow-y: auto;
+        }
+    </style>
+</head>
+<body>
+    <h1>Sokol GFX WebGL2 Renderer</h1>
+    <canvas id="canvas" width="800" height="600"></canvas>
+    <div id="info">Initializing...</div>
+    <div id="status" class="status"></div>
+    <div id="controls">
+        <button onclick="togglePause()">Pause/Resume</button>
+        <button onclick="resetRenderer()">Reset</button>
+    </div>
+    <div id="debug"></div>
+
+    <script src="gl-bridge.js"></script>
+    <script>
+        const canvas = document.getElementById('canvas');
+        const info = document.getElementById('info');
+        const status = document.getElementById('status');
+        const debug = document.getElementById('debug');
+        
+        let frameCount = 0;
+        let isPaused = false;
+        let wasmModule = null;
+        let animationId = null;
+        let glBridge = null;
+        let gl = null;
+
+        // Debug logging
+        function log(msg) {
+            console.log(msg);
+            const div = document.createElement('div');
+            div.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
+            debug.appendChild(div);
+            debug.scrollTop = debug.scrollHeight;
+        }
+
+        // Initialize WebGL2 context
+        function initWebGL() {
+            gl = canvas.getContext('webgl2', {
+                alpha: false,
+                depth: true,
+                stencil: true,
+                antialias: true,
+                premultipliedAlpha: false,
+                preserveDrawingBuffer: false,
+                powerPreference: 'high-performance'
+            });
+            
+            if (!gl) {
+                throw new Error('WebGL2 not supported by this browser');
+            }
+            
+            log(`WebGL2 initialized: ${gl.getParameter(gl.VERSION)}`);
+            log(`Renderer: ${gl.getParameter(gl.RENDERER)}`);
+            log(`Vendor: ${gl.getParameter(gl.VENDOR)}`);
+            
+            return gl;
+        }
+
+        // Load WASM module
+        async function loadWasm() {
+            log('Loading WASM module...');
+            const response = await fetch('build.nosync/renderer.wasm');
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            }
+            
+            const wasmBuffer = await response.arrayBuffer();
+            log(`WASM size: ${(wasmBuffer.byteLength / 1024).toFixed(2)} KB`);
+            
+            // Create GL bridge
+            glBridge = new GLBridge(gl, null); // Memory will be set after instantiation
+            const glImports = glBridge.createImportObject();
+            
+            // Import functions for WASM
+            const importObject = {
+                env: {
+                    // Canvas dimensions
+                    js_canvas_width: () => canvas.width,
+                    js_canvas_height: () => canvas.height,
+                    js_webgl_framebuffer: () => 0, // Default framebuffer
+                    
+                    // GL functions from bridge
+                    ...glImports
+                }
+            };
+            
+            const wasm = await WebAssembly.instantiate(wasmBuffer, importObject);
+            
+            // Set memory reference in bridge
+            glBridge.memory = wasm.instance.exports.memory;
+            
+            return wasm.instance;
+        }
+
+        // Initialize renderer
+        async function init() {
+            try {
+                // Initialize WebGL2
+                initWebGL();
+                
+                // Load and instantiate WASM
+                wasmModule = await loadWasm();
+                
+                log('Calling init() from WASM...');
+                wasmModule.exports.init();
+                
+                info.innerHTML = `<strong>WASM initialized successfully!</strong><br>` +
+                                 `Memory: ${(wasmModule.exports.memory.buffer.byteLength / 1024 / 1024).toFixed(2)} MB<br>` +
+                                 `WebGL2: ${gl.getParameter(gl.VERSION)}<br>` +
+                                 `Renderer: ${gl.getParameter(gl.RENDERER)}`;
+                
+                status.className = 'status success';
+                status.textContent = 'Renderer ready - starting render loop';
+                
+                // Start render loop
+                startRenderLoop();
+                
+            } catch (error) {
+                status.className = 'status error';
+                status.textContent = `Error: ${error.message}`;
+                info.innerHTML = `<strong>Failed to initialize</strong><br>${error.message}`;
+                log(`ERROR: ${error.message}`);
+                console.error(error);
+            }
+        }
+
+        // Render loop
+        function render() {
+            if (!wasmModule || isPaused) {
+                animationId = requestAnimationFrame(render);
+                return;
+            }
+            
+            try {
+                // Call frame function from WASM
+                wasmModule.exports.frame();
+                
+                frameCount++;
+                if (frameCount % 60 === 0) {
+                    status.textContent = `Frames rendered: ${frameCount} (${(60).toFixed(1)} FPS)`;
+                }
+            } catch (error) {
+                log(`Render error: ${error.message}`);
+                console.error(error);
+                isPaused = true;
+            }
+            
+            animationId = requestAnimationFrame(render);
+        }
+
+        function startRenderLoop() {
+            if (animationId) cancelAnimationFrame(animationId);
+            frameCount = 0;
+            render();
+        }
+
+        // Controls
+        window.togglePause = function() {
+            isPaused = !isPaused;
+            log(isPaused ? 'Paused' : 'Resumed');
+        };
+
+        window.resetRenderer = function() {
+            log('Resetting renderer...');
+            if (wasmModule && wasmModule.exports.cleanup) {
+                wasmModule.exports.cleanup();
+            }
+            frameCount = 0;
+            if (wasmModule) {
+                wasmModule.exports.init();
+                log('Renderer reset');
+            }
+        };
+
+        // Cleanup on page unload
+        window.addEventListener('beforeunload', () => {
+            if (wasmModule && wasmModule.exports.cleanup) {
+                wasmModule.exports.cleanup();
+            }
+            if (animationId) {
+                cancelAnimationFrame(animationId);
+            }
+        });
+
+        // Handle window resize
+        window.addEventListener('resize', () => {
+            // Optionally resize canvas here
+            // canvas.width = window.innerWidth - 40;
+            // canvas.height = window.innerHeight - 200;
+        });
+
+        // Start initialization
+        init();
+    </script>
+</body>
+</html>

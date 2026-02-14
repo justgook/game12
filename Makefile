@@ -27,7 +27,7 @@ ASSETS_DIR ?= assets
 
 
 triangle-sapp.glsl.h: triangle-sapp.glsl
-	./sokol-shdc --input triangle-sapp.glsl --output triangle-sapp.glsl.h --slang glsl430:metal_macos
+	./sokol-shdc --input triangle-sapp.glsl --output triangle-sapp.glsl.h --slang glsl430:metal_macos:glsl300es
 
 .PHONY: all
 all: build
@@ -40,8 +40,33 @@ build: triangle-sapp.glsl.h | $(BUILD_DIR)
 		-framework Cocoa -framework QuartzCore -framework Foundation \
 		-o $(BUILD_DIR)/triangle
 
+.PHONY: web
+web: triangle-sapp.glsl.h | $(BUILD_DIR)/web
+	$(call QUIET, @echo "  ZIG CC  triangle.wasm")
+	$(Q)zig build-exe \
+		web/sokol_impl_web.c web/main_web.c \
+		-target wasm32-freestanding \
+		-fno-entry \
+		-rdynamic \
+		-O ReleaseFast \
+		-isystem web/include \
+		-Iweb \
+		-DSOKOL_GLES3 \
+		-DSOKOL_EXTERNAL_GL_LOADER \
+		--import-memory \
+		-femit-bin=$(BUILD_DIR)/web/triangle.wasm
+	$(Q)$(CP) web/index.html $(BUILD_DIR)/web/index.html
+
 $(BUILD_DIR):
 	$(Q)$(MKDIR_P) $(BUILD_DIR)
+
+$(BUILD_DIR)/web: | $(BUILD_DIR)
+	$(Q)$(MKDIR_P) $(BUILD_DIR)/web
+
+.PHONY: serve
+serve: web
+	$(call QUIET, @echo "  SERVE   http://localhost:8000")
+	$(Q)python3 -m http.server 8000 --directory $(BUILD_DIR)/web
 
 .PHONY: clean
 clean:
