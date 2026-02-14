@@ -42,7 +42,7 @@ build: triangle-sapp.glsl.h | $(BUILD_DIR)
 		-femit-bin=$(BUILD_DIR)/triangle
 
 .PHONY: web
-web: $(BUILD_DIR)/web/triangle.wasm $(BUILD_DIR)/web/index.html $(BUILD_DIR)/web/gl-bridge.js
+web: $(BUILD_DIR)/web/triangle.wasm $(BUILD_DIR)/web/index.html $(BUILD_DIR)/web/gl-bridge.js $(BUILD_DIR)/web/app-bridge.js
 
 $(BUILD_DIR)/web/triangle.wasm: web/main.c main.c | $(BUILD_DIR)/web
 	$(Q)echo "Bild WASM App"
@@ -59,6 +59,9 @@ $(BUILD_DIR)/web/index.html: web/index.html | $(BUILD_DIR)/web
 	$(Q)$(CP) $< $@
 
 $(BUILD_DIR)/web/gl-bridge.js: web/gl-bridge.js | $(BUILD_DIR)/web
+	$(Q)$(CP) $< $@
+
+$(BUILD_DIR)/web/app-bridge.js: web/app-bridge.js | $(BUILD_DIR)/web
 	$(Q)$(CP) $< $@
 
 $(BUILD_DIR):

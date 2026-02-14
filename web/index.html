@@ -95,6 +95,7 @@
   <div id="debug"></div>
 
   <script src="gl-bridge.js?v=2"></script>
+  <script src="app-bridge.js"></script>
   <script>
     const canvas = document.getElementById('canvas');
     const info = document.getElementById('info');
@@ -106,6 +107,7 @@
     let wasmModule = null;
     let animationId = null;
     let glBridge = null;
+    let appBridge = null;
     let gl = null;
 
     // Debug logging
@@ -184,6 +186,11 @@
 
         // Load and instantiate WASM
         wasmModule = await loadWasm();
+        window.wasmModule = wasmModule; // Make available globally for bridges
+
+        // Create App bridge for event handling (after memory is set)
+        appBridge = new AppBridge(canvas, glBridge.memory);
+        log('AppBridge initialized for event handling');
 
         log('Calling init() from WASM...');
         wasmModule.exports.init();
@@ -198,6 +205,11 @@
 
         // Start render loop
         startRenderLoop();
+
+        // Send initial resize event
+        if (appBridge) {
+          appBridge.handleResize();
+        }
 
       } catch (error) {
         status.className = 'status error';
@@ -263,6 +275,9 @@
       }
       if (animationId) {
         cancelAnimationFrame(animationId);
+      }
+      if (appBridge) {
+        appBridge.cleanup();
       }
     });
 

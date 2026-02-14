@@ -76,3 +76,36 @@ __attribute__((visibility("default"), export_name("cleanup"))) void
 platform_cleanup(void) {
   cleanup(); // App cleanup from main.c
 }
+
+// Platform event - calls app event, exports as "event" to JS
+__attribute__((visibility("default"), export_name("event"))) void
+platform_event(uint32_t event_ptr) {
+  const sapp_event* e = (const sapp_event*)event_ptr;
+  event(e); // App event from main.c
+}
+
+// Get event buffer for JS to write event data
+static sapp_event g_event_buffer;
+__attribute__((visibility("default"), export_name("get_event_buffer"))) uint32_t
+platform_get_event_buffer(void) {
+  return (uint32_t)&g_event_buffer;
+}
+
+// Export critical field offsets for JS to use
+__attribute__((visibility("default"), export_name("event_offset_mouse_x"))) uint32_t
+event_offset_mouse_x(void) { return offsetof(sapp_event, mouse_x); }
+
+__attribute__((visibility("default"), export_name("event_offset_mouse_y"))) uint32_t
+event_offset_mouse_y(void) { return offsetof(sapp_event, mouse_y); }
+
+__attribute__((visibility("default"), export_name("event_offset_window_width"))) uint32_t
+event_offset_window_width(void) { return offsetof(sapp_event, window_width); }
+
+__attribute__((visibility("default"), export_name("event_offset_window_height"))) uint32_t
+event_offset_window_height(void) { return offsetof(sapp_event, window_height); }
+
+__attribute__((visibility("default"), export_name("event_offset_framebuffer_width"))) uint32_t
+event_offset_framebuffer_width(void) { return offsetof(sapp_event, framebuffer_width); }
+
+__attribute__((visibility("default"), export_name("event_offset_framebuffer_height"))) uint32_t
+event_offset_framebuffer_height(void) { return offsetof(sapp_event, framebuffer_height); }
