@@ -1,545 +1,281 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
+
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Triangle (WASM)</title>
-<style>
-  * { margin: 0; padding: 0; }
-  html, body { width: 100%; height: 100%; overflow: hidden; background: #000; }
-  canvas { display: block; width: 100%; height: 100%; }
-</style>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sokol GFX WebGL2 Renderer</title>
+  <style>
+    body {
+      margin: 0;
+      padding: 20px;
+      background: #1a1a1a;
+      color: #fff;
+      font-family: Arial, sans-serif;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+
+    canvas {
+      border: 2px solid #444;
+      background: #000;
+    }
+
+    #info {
+      margin-top: 20px;
+      padding: 10px;
+      background: #333;
+      border-radius: 5px;
+      font-family: monospace;
+      font-size: 14px;
+      max-width: 800px;
+      overflow-x: auto;
+    }
+
+    .status {
+      margin-top: 10px;
+      padding: 10px;
+      border-radius: 5px;
+    }
+
+    .status.success {
+      background: #2d5a2d;
+    }
+
+    .status.error {
+      background: #5a2d2d;
+    }
+
+    .status.info {
+      background: #2d3d5a;
+    }
+
+    #controls {
+      margin-top: 10px;
+    }
+
+    button {
+      padding: 8px 16px;
+      margin: 0 5px;
+      background: #444;
+      color: #fff;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+
+    button:hover {
+      background: #555;
+    }
+
+    #debug {
+      margin-top: 10px;
+      padding: 10px;
+      background: #222;
+      border-radius: 5px;
+      font-family: monospace;
+      font-size: 12px;
+      max-width: 800px;
+      max-height: 200px;
+      overflow-y: auto;
+    }
+  </style>
 </head>
+
 <body>
-<canvas id="canvas"></canvas>
-<script>
-"use strict";
+  <h1>Sokol GFX WebGL2 Renderer</h1>
+  <canvas id="canvas" width="800" height="600"></canvas>
+  <div id="info">Initializing...</div>
+  <div id="status" class="status"></div>
+  <div id="controls">
+    <button onclick="togglePause()">Pause/Resume</button>
+    <button onclick="resetRenderer()">Reset</button>
+  </div>
+  <div id="debug"></div>
 
-// ============================================================
-// WebGL2 <-> WASM bridge
-//
-// sokol_gfx (GLES3 backend) calls standard GL functions like
-// glCreateShader, glBindBuffer, etc. In freestanding WASM these
-// appear as imports from the "env" module. This script provides
-// them by wrapping the browser's WebGL2 API.
-//
-// Key challenge: GL uses integer IDs (GLuint), but WebGL uses
-// JavaScript objects. We maintain a table mapping integer IDs
-// to JS objects (GL objects table).
-// ============================================================
+  <script src="gl-bridge.js"></script>
+  <script>
+    const canvas = document.getElementById('canvas');
+    const info = document.getElementById('info');
+    const status = document.getElementById('status');
+    const debug = document.getElementById('debug');
 
-const canvas = document.getElementById("canvas");
-const gl = canvas.getContext("webgl2", {
-  alpha: false,
-  depth: true,
-  stencil: true,
-  antialias: false,
-  preserveDrawingBuffer: false,
-});
-if (!gl) {
-  document.body.innerHTML = "<h1 style='color:#fff;padding:2em'>WebGL2 not supported</h1>";
-  throw new Error("WebGL2 not available");
-}
+    let frameCount = 0;
+    let isPaused = false;
+    let wasmModule = null;
+    let animationId = null;
+    let glBridge = null;
+    let gl = null;
 
-// ---- GL object table ----
-// Index 0 is reserved (GL_NONE / default framebuffer / null object).
-// We store JS objects and return integer handles to WASM.
-const glObjs = [null]; // index 0 = null
+    // Debug logging
+    function log(msg) {
+      console.log(msg);
+      const div = document.createElement('div');
+      div.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
+      debug.appendChild(div);
+      debug.scrollTop = debug.scrollHeight;
+    }
 
-function glAlloc(obj) {
-  const id = glObjs.length;
-  glObjs.push(obj);
-  return id;
-}
+    // Initialize WebGL2 context
+    function initWebGL() {
+      gl = canvas.getContext('webgl2', {
+        alpha: false,
+        depth: true,
+        stencil: true,
+        antialias: true,
+        premultipliedAlpha: false,
+        preserveDrawingBuffer: false,
+        powerPreference: 'high-performance'
+      });
 
-function glGet(id) {
-  return glObjs[id] || null;
-}
-
-function glFree(id) {
-  if (id > 0) glObjs[id] = null;
-}
-
-// ---- WASM memory helpers ----
-let wasmMemory = null; // set after instantiation
-let wasmInstance = null;
-
-function getMemU8() { return new Uint8Array(wasmMemory.buffer); }
-function getMemI32() { return new Int32Array(wasmMemory.buffer); }
-function getMemU32() { return new Uint32Array(wasmMemory.buffer); }
-function getMemF32() { return new Float32Array(wasmMemory.buffer); }
-
-function readStr(ptr) {
-  const mem = getMemU8();
-  let end = ptr;
-  while (mem[end] !== 0) end++;
-  return new TextDecoder().decode(mem.subarray(ptr, end));
-}
-
-function readStrLen(ptr, len) {
-  const mem = getMemU8();
-  return new TextDecoder().decode(mem.subarray(ptr, ptr + len));
-}
-
-// ---- Simple heap allocator for host_malloc/host_free ----
-// We use a simple free-list allocator on the WASM linear memory.
-// WASM memory starts with data+bss segments; we allocate from the end.
-let heapBase = 0;
-let heapEnd = 0;
-
-// Allocation: simple bump allocator (free is a no-op for simplicity,
-// sokol allocates at init and rarely frees).
-function hostMalloc(size) {
-  // Align to 16 bytes
-  size = (size + 15) & ~15;
-  if (heapBase + size > heapEnd) {
-    // Grow memory
-    const pages = Math.ceil((heapBase + size - heapEnd) / 65536) + 1;
-    wasmMemory.grow(pages);
-    heapEnd = wasmMemory.buffer.byteLength;
-  }
-  const ptr = heapBase;
-  heapBase += size;
-  return ptr;
-}
-
-function hostFree(ptr) {
-  // No-op for bump allocator
-}
-
-// ---- Build the GL import object ----
-// Each GL function is mapped from the C calling convention (integer handles,
-// pointers into WASM memory) to WebGL2 API calls (JS objects).
-
-function buildGLImports() {
-  return {
-    // ---- Texture ----
-    glActiveTexture: (texture) => gl.activeTexture(texture),
-    glBindTexture: (target, texture) => gl.bindTexture(target, glGet(texture)),
-    glGenTextures: (n, ptr) => {
-      const ids = getMemI32();
-      for (let i = 0; i < n; i++) {
-        ids[(ptr >> 2) + i] = glAlloc(gl.createTexture());
+      if (!gl) {
+        throw new Error('WebGL2 not supported by this browser');
       }
-    },
-    glDeleteTextures: (n, ptr) => {
-      const ids = getMemI32();
-      for (let i = 0; i < n; i++) {
-        const id = ids[(ptr >> 2) + i];
-        gl.deleteTexture(glGet(id));
-        glFree(id);
-      }
-    },
-    glTexImage2D: (target, level, internalformat, width, height, border, format, type, pixels) => {
-      const data = pixels ? new Uint8Array(wasmMemory.buffer, pixels) : null;
-      gl.texImage2D(target, level, internalformat, width, height, border, format, type, data);
-    },
-    glTexImage3D: (target, level, internalformat, width, height, depth, border, format, type, pixels) => {
-      const data = pixels ? new Uint8Array(wasmMemory.buffer, pixels) : null;
-      gl.texImage3D(target, level, internalformat, width, height, depth, border, format, type, data);
-    },
-    glTexSubImage2D: (target, level, xoff, yoff, width, height, format, type, pixels) => {
-      const data = pixels ? new Uint8Array(wasmMemory.buffer, pixels) : null;
-      gl.texSubImage2D(target, level, xoff, yoff, width, height, format, type, data);
-    },
-    glTexSubImage3D: (target, level, xoff, yoff, zoff, width, height, depth, format, type, pixels) => {
-      const data = pixels ? new Uint8Array(wasmMemory.buffer, pixels) : null;
-      gl.texSubImage3D(target, level, xoff, yoff, zoff, width, height, depth, format, type, data);
-    },
-    glCompressedTexImage2D: (target, level, format, w, h, border, size, data) => {
-      const view = data ? new Uint8Array(wasmMemory.buffer, data, size) : null;
-      gl.compressedTexImage2D(target, level, format, w, h, border, view);
-    },
-    glCompressedTexImage3D: (target, level, format, w, h, d, border, size, data) => {
-      const view = data ? new Uint8Array(wasmMemory.buffer, data, size) : null;
-      gl.compressedTexImage3D(target, level, format, w, h, d, border, view);
-    },
-    glCompressedTexSubImage2D: (target, level, xoff, yoff, w, h, format, size, data) => {
-      const view = data ? new Uint8Array(wasmMemory.buffer, data, size) : null;
-      gl.compressedTexSubImage2D(target, level, xoff, yoff, w, h, format, view);
-    },
-    glCompressedTexSubImage3D: (target, level, xoff, yoff, zoff, w, h, d, format, size, data) => {
-      const view = data ? new Uint8Array(wasmMemory.buffer, data, size) : null;
-      gl.compressedTexSubImage3D(target, level, xoff, yoff, zoff, w, h, d, format, view);
-    },
-    glTexParameteri: (target, pname, param) => gl.texParameteri(target, pname, param),
-    glTexParameterf: (target, pname, param) => gl.texParameterf(target, pname, param),
-    glTexParameterfv: (target, pname, ptr) => {
-      const v = getMemF32();
-      gl.texParameterf(target, pname, v[ptr >> 2]);
-    },
-    glTexStorage2D: (target, levels, fmt, w, h) => gl.texStorage2D(target, levels, fmt, w, h),
-    glTexStorage3D: (target, levels, fmt, w, h, d) => gl.texStorage3D(target, levels, fmt, w, h, d),
-    glTexStorage2DMultisample: () => { /* not available in WebGL2 */ },
-    glTexStorage3DMultisample: () => { /* not available in WebGL2 */ },
-    glTexImage2DMultisample: () => { /* not available in WebGL2 */ },
-    glTexImage3DMultisample: () => { /* not available in WebGL2 */ },
-    glTextureView: () => { /* not available in WebGL2 */ },
-    glPixelStorei: (pname, param) => gl.pixelStorei(pname, param),
 
-    // ---- Buffer ----
-    glGenBuffers: (n, ptr) => {
-      const ids = getMemI32();
-      for (let i = 0; i < n; i++) {
-        ids[(ptr >> 2) + i] = glAlloc(gl.createBuffer());
-      }
-    },
-    glDeleteBuffers: (n, ptr) => {
-      const ids = getMemI32();
-      for (let i = 0; i < n; i++) {
-        const id = ids[(ptr >> 2) + i];
-        gl.deleteBuffer(glGet(id));
-        glFree(id);
-      }
-    },
-    glBindBuffer: (target, buffer) => gl.bindBuffer(target, glGet(buffer)),
-    glBindBufferBase: (target, index, buffer) => gl.bindBufferBase(target, index, glGet(buffer)),
-    glBindBufferRange: (target, index, buffer, offset, size) => gl.bindBufferRange(target, index, glGet(buffer), offset, size),
-    glBufferData: (target, size, data, usage) => {
-      if (data) {
-        gl.bufferData(target, new Uint8Array(wasmMemory.buffer, data, size), usage);
-      } else {
-        gl.bufferData(target, size, usage);
-      }
-    },
-    glBufferSubData: (target, offset, size, data) => {
-      gl.bufferSubData(target, offset, new Uint8Array(wasmMemory.buffer, data, size));
-    },
+      log(`WebGL2 initialized: ${gl.getParameter(gl.VERSION)}`);
+      log(`Renderer: ${gl.getParameter(gl.RENDERER)}`);
+      log(`Vendor: ${gl.getParameter(gl.VENDOR)}`);
 
-    // ---- Shader / Program ----
-    glCreateShader: (type) => glAlloc(gl.createShader(type)),
-    glDeleteShader: (shader) => { gl.deleteShader(glGet(shader)); glFree(shader); },
-    glShaderSource: (shader, count, stringsPtr, lengthsPtr) => {
-      // sokol passes count=1, strings[0]=ptr to source, lengths=NULL (null-terminated)
-      const ptrs = getMemI32();
-      let source = "";
-      for (let i = 0; i < count; i++) {
-        const sptr = ptrs[(stringsPtr >> 2) + i];
-        if (lengthsPtr) {
-          const len = ptrs[(lengthsPtr >> 2) + i];
-          if (len > 0) {
-            source += readStrLen(sptr, len);
-          } else {
-            source += readStr(sptr);
-          }
-        } else {
-          source += readStr(sptr);
+      return gl;
+    }
+
+    // Load WASM module
+    async function loadWasm() {
+      log('Loading WASM module...');
+      const response = await fetch('./triangle.wasm');
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+
+      const wasmBuffer = await response.arrayBuffer();
+      log(`WASM size: ${(wasmBuffer.byteLength / 1024).toFixed(2)} KB`);
+
+      // Create GL bridge
+      glBridge = new GLBridge(gl, null); // Memory will be set after instantiation
+      const glImports = glBridge.createImportObject();
+
+      // Import functions for WASM
+      const importObject = {
+        env: {
+          // Canvas dimensions
+          js_canvas_width: () => canvas.width,
+          js_canvas_height: () => canvas.height,
+          js_webgl_framebuffer: () => 0, // Default framebuffer
+
+          // GL functions from bridge
+          ...glImports
         }
+      };
+
+      const wasm = await WebAssembly.instantiate(wasmBuffer, importObject);
+
+      // Set memory reference in bridge
+      glBridge.memory = wasm.instance.exports.memory;
+
+      return wasm.instance;
+    }
+
+    // Initialize renderer
+    async function init() {
+      try {
+        // Initialize WebGL2
+        initWebGL();
+
+        // Load and instantiate WASM
+        wasmModule = await loadWasm();
+
+        log('Calling init() from WASM...');
+        wasmModule.exports.init();
+
+        info.innerHTML = `<strong>WASM initialized successfully!</strong><br>` +
+          `Memory: ${(wasmModule.exports.memory.buffer.byteLength / 1024 / 1024).toFixed(2)} MB<br>` +
+          `WebGL2: ${gl.getParameter(gl.VERSION)}<br>` +
+          `Renderer: ${gl.getParameter(gl.RENDERER)}`;
+
+        status.className = 'status success';
+        status.textContent = 'Renderer ready - starting render loop';
+
+        // Start render loop
+        startRenderLoop();
+
+      } catch (error) {
+        status.className = 'status error';
+        status.textContent = `Error: ${error.message}`;
+        info.innerHTML = `<strong>Failed to initialize</strong><br>${error.message}`;
+        log(`ERROR: ${error.message}`);
+        console.error(error);
       }
-      gl.shaderSource(glGet(shader), source);
-    },
-    glCompileShader: (shader) => gl.compileShader(glGet(shader)),
-    glGetShaderiv: (shader, pname, ptr) => {
-      const ids = getMemI32();
-      let val = gl.getShaderParameter(glGet(shader), pname);
-      if (typeof val === "boolean") val = val ? 1 : 0;
-      ids[ptr >> 2] = val;
-    },
-    glGetShaderInfoLog: (shader, bufSize, lengthPtr, buf) => {
-      const log = gl.getShaderInfoLog(glGet(shader)) || "";
-      const enc = new TextEncoder();
-      const bytes = enc.encode(log);
-      const mem = getMemU8();
-      const len = Math.min(bytes.length, bufSize - 1);
-      mem.set(bytes.subarray(0, len), buf);
-      mem[buf + len] = 0;
-      if (lengthPtr) getMemI32()[lengthPtr >> 2] = len;
-    },
-    glCreateProgram: () => glAlloc(gl.createProgram()),
-    glDeleteProgram: (program) => { gl.deleteProgram(glGet(program)); glFree(program); },
-    glAttachShader: (program, shader) => gl.attachShader(glGet(program), glGet(shader)),
-    glLinkProgram: (program) => gl.linkProgram(glGet(program)),
-    glGetProgramiv: (program, pname, ptr) => {
-      const ids = getMemI32();
-      let val = gl.getProgramParameter(glGet(program), pname);
-      if (typeof val === "boolean") val = val ? 1 : 0;
-      ids[ptr >> 2] = val;
-    },
-    glGetProgramInfoLog: (program, bufSize, lengthPtr, buf) => {
-      const log = gl.getProgramInfoLog(glGet(program)) || "";
-      const enc = new TextEncoder();
-      const bytes = enc.encode(log);
-      const mem = getMemU8();
-      const len = Math.min(bytes.length, bufSize - 1);
-      mem.set(bytes.subarray(0, len), buf);
-      mem[buf + len] = 0;
-      if (lengthPtr) getMemI32()[lengthPtr >> 2] = len;
-    },
-    glUseProgram: (program) => gl.useProgram(glGet(program)),
-    glGetAttribLocation: (program, namePtr) => gl.getAttribLocation(glGet(program), readStr(namePtr)),
-    glGetUniformLocation: (program, namePtr) => {
-      const loc = gl.getUniformLocation(glGet(program), readStr(namePtr));
-      if (loc === null) return -1;
-      return glAlloc(loc);
-    },
+    }
 
-    // ---- Uniform ----
-    glUniform1i: (loc, v0) => gl.uniform1i(glGet(loc), v0),
-    glUniform1fv: (loc, count, ptr) => gl.uniform1fv(glGet(loc), new Float32Array(wasmMemory.buffer, ptr, count)),
-    glUniform2fv: (loc, count, ptr) => gl.uniform2fv(glGet(loc), new Float32Array(wasmMemory.buffer, ptr, count * 2)),
-    glUniform3fv: (loc, count, ptr) => gl.uniform3fv(glGet(loc), new Float32Array(wasmMemory.buffer, ptr, count * 3)),
-    glUniform4fv: (loc, count, ptr) => gl.uniform4fv(glGet(loc), new Float32Array(wasmMemory.buffer, ptr, count * 4)),
-    glUniform1iv: (loc, count, ptr) => gl.uniform1iv(glGet(loc), new Int32Array(wasmMemory.buffer, ptr, count)),
-    glUniform2iv: (loc, count, ptr) => gl.uniform2iv(glGet(loc), new Int32Array(wasmMemory.buffer, ptr, count * 2)),
-    glUniform3iv: (loc, count, ptr) => gl.uniform3iv(glGet(loc), new Int32Array(wasmMemory.buffer, ptr, count * 3)),
-    glUniform4iv: (loc, count, ptr) => gl.uniform4iv(glGet(loc), new Int32Array(wasmMemory.buffer, ptr, count * 4)),
-    glUniformMatrix4fv: (loc, count, transpose, ptr) => {
-      gl.uniformMatrix4fv(glGet(loc), !!transpose, new Float32Array(wasmMemory.buffer, ptr, count * 16));
-    },
-
-    // ---- VAO ----
-    glGenVertexArrays: (n, ptr) => {
-      const ids = getMemI32();
-      for (let i = 0; i < n; i++) {
-        ids[(ptr >> 2) + i] = glAlloc(gl.createVertexArray());
+    // Render loop
+    function render() {
+      if (!wasmModule || isPaused) {
+        animationId = requestAnimationFrame(render);
+        return;
       }
-    },
-    glDeleteVertexArrays: (n, ptr) => {
-      const ids = getMemI32();
-      for (let i = 0; i < n; i++) {
-        const id = ids[(ptr >> 2) + i];
-        gl.deleteVertexArray(glGet(id));
-        glFree(id);
+
+      try {
+        // Call frame function from WASM
+        wasmModule.exports.frame();
+
+        frameCount++;
+        if (frameCount % 60 === 0) {
+          status.textContent = `Frames rendered: ${frameCount} (${(60).toFixed(1)} FPS)`;
+        }
+      } catch (error) {
+        log(`Render error: ${error.message}`);
+        console.error(error);
+        isPaused = true;
       }
-    },
-    glBindVertexArray: (vao) => gl.bindVertexArray(glGet(vao)),
 
-    // ---- Vertex attributes ----
-    glEnableVertexAttribArray: (index) => gl.enableVertexAttribArray(index),
-    glDisableVertexAttribArray: (index) => gl.disableVertexAttribArray(index),
-    glVertexAttribPointer: (index, size, type, normalized, stride, pointer) => {
-      gl.vertexAttribPointer(index, size, type, !!normalized, stride, pointer);
-    },
-    glVertexAttribIPointer: (index, size, type, stride, pointer) => {
-      gl.vertexAttribIPointer(index, size, type, stride, pointer);
-    },
-    glVertexAttribDivisor: (index, divisor) => gl.vertexAttribDivisor(index, divisor),
+      animationId = requestAnimationFrame(render);
+    }
 
-    // ---- Draw ----
-    glDrawArrays: (mode, first, count) => gl.drawArrays(mode, first, count),
-    glDrawElements: (mode, count, type, offset) => gl.drawElements(mode, count, type, offset),
-    glDrawArraysInstanced: (mode, first, count, instancecount) => gl.drawArraysInstanced(mode, first, count, instancecount),
-    glDrawElementsInstanced: (mode, count, type, offset, instancecount) => gl.drawElementsInstanced(mode, count, type, offset, instancecount),
-    glDrawBuffers: (n, ptr) => {
-      const bufs = [];
-      const ids = getMemI32();
-      for (let i = 0; i < n; i++) bufs.push(ids[(ptr >> 2) + i]);
-      gl.drawBuffers(bufs);
-    },
-    // These are not available in base WebGL2 — stub them out
-    glDrawElementsBaseVertex: () => {},
-    glDrawElementsInstancedBaseVertex: () => {},
-    glDrawElementsInstancedBaseVertexBaseInstance: () => {},
-    glDrawArraysInstancedBaseInstance: () => {},
+    function startRenderLoop() {
+      if (animationId) cancelAnimationFrame(animationId);
+      frameCount = 0;
+      render();
+    }
 
-    // ---- Framebuffer ----
-    glGenFramebuffers: (n, ptr) => {
-      const ids = getMemI32();
-      for (let i = 0; i < n; i++) {
-        ids[(ptr >> 2) + i] = glAlloc(gl.createFramebuffer());
+    // Controls
+    window.togglePause = function () {
+      isPaused = !isPaused;
+      log(isPaused ? 'Paused' : 'Resumed');
+    };
+
+    window.resetRenderer = function () {
+      log('Resetting renderer...');
+      if (wasmModule && wasmModule.exports.cleanup) {
+        wasmModule.exports.cleanup();
       }
-    },
-    glDeleteFramebuffers: (n, ptr) => {
-      const ids = getMemI32();
-      for (let i = 0; i < n; i++) {
-        const id = ids[(ptr >> 2) + i];
-        gl.deleteFramebuffer(glGet(id));
-        glFree(id);
+      frameCount = 0;
+      if (wasmModule) {
+        wasmModule.exports.init();
+        log('Renderer reset');
       }
-    },
-    glBindFramebuffer: (target, fb) => gl.bindFramebuffer(target, glGet(fb)),
-    glFramebufferTexture2D: (target, attachment, textarget, texture, level) => {
-      gl.framebufferTexture2D(target, attachment, textarget, glGet(texture), level);
-    },
-    glFramebufferTextureLayer: (target, attachment, texture, level, layer) => {
-      gl.framebufferTextureLayer(target, attachment, glGet(texture), level, layer);
-    },
-    glFramebufferRenderbuffer: (target, attachment, rbtarget, rb) => {
-      gl.framebufferRenderbuffer(target, attachment, rbtarget, glGet(rb));
-    },
-    glCheckFramebufferStatus: (target) => gl.checkFramebufferStatus(target),
-    glBlitFramebuffer: (sx0, sy0, sx1, sy1, dx0, dy0, dx1, dy1, mask, filter) => {
-      gl.blitFramebuffer(sx0, sy0, sx1, sy1, dx0, dy0, dx1, dy1, mask, filter);
-    },
-    glReadBuffer: (src) => gl.readBuffer(src),
-    glInvalidateFramebuffer: (target, numAttachments, ptr) => {
-      const attachments = [];
-      const ids = getMemI32();
-      for (let i = 0; i < numAttachments; i++) attachments.push(ids[(ptr >> 2) + i]);
-      gl.invalidateFramebuffer(target, attachments);
-    },
+    };
 
-    // ---- Renderbuffer ----
-    glGenRenderbuffers: (n, ptr) => {
-      const ids = getMemI32();
-      for (let i = 0; i < n; i++) {
-        ids[(ptr >> 2) + i] = glAlloc(gl.createRenderbuffer());
+    // Cleanup on page unload
+    window.addEventListener('beforeunload', () => {
+      if (wasmModule && wasmModule.exports.cleanup) {
+        wasmModule.exports.cleanup();
       }
-    },
-    glDeleteRenderbuffers: (n, ptr) => {
-      const ids = getMemI32();
-      for (let i = 0; i < n; i++) {
-        const id = ids[(ptr >> 2) + i];
-        gl.deleteRenderbuffer(glGet(id));
-        glFree(id);
+      if (animationId) {
+        cancelAnimationFrame(animationId);
       }
-    },
-    glBindRenderbuffer: (target, rb) => gl.bindRenderbuffer(target, glGet(rb)),
-    glRenderbufferStorage: (target, fmt, w, h) => gl.renderbufferStorage(target, fmt, w, h),
-    glRenderbufferStorageMultisample: (target, samples, fmt, w, h) => gl.renderbufferStorageMultisample(target, samples, fmt, w, h),
+    });
 
-    // ---- Sampler ----
-    glGenSamplers: (n, ptr) => {
-      const ids = getMemI32();
-      for (let i = 0; i < n; i++) {
-        ids[(ptr >> 2) + i] = glAlloc(gl.createSampler());
-      }
-    },
-    glDeleteSamplers: (n, ptr) => {
-      const ids = getMemI32();
-      for (let i = 0; i < n; i++) {
-        const id = ids[(ptr >> 2) + i];
-        gl.deleteSampler(glGet(id));
-        glFree(id);
-      }
-    },
-    glBindSampler: (unit, sampler) => gl.bindSampler(unit, glGet(sampler)),
-    glSamplerParameteri: (sampler, pname, param) => gl.samplerParameteri(glGet(sampler), pname, param),
-    glSamplerParameterf: (sampler, pname, param) => gl.samplerParameterf(glGet(sampler), pname, param),
-    glSamplerParameterfv: (sampler, pname, ptr) => {
-      // sokol uses this for border color (4 floats)
-      const v = new Float32Array(wasmMemory.buffer, ptr, 4);
-      // WebGL2 samplerParameterf doesn't support arrays, skip
-    },
+    // Handle window resize
+    window.addEventListener('resize', () => {
+      // Optionally resize canvas here
+      // canvas.width = window.innerWidth - 40;
+      // canvas.height = window.innerHeight - 200;
+    });
 
-    // ---- State ----
-    glEnable: (cap) => gl.enable(cap),
-    glDisable: (cap) => gl.disable(cap),
-    glColorMask: (r, g, b, a) => gl.colorMask(!!r, !!g, !!b, !!a),
-    glColorMaski: (index, r, g, b, a) => gl.colorMask(!!r, !!g, !!b, !!a), // WebGL2 no per-target colorMask
-    glDepthMask: (flag) => gl.depthMask(!!flag),
-    glDepthFunc: (func) => gl.depthFunc(func),
-    glStencilFunc: (func, ref, mask) => gl.stencilFunc(func, ref, mask),
-    glStencilFuncSeparate: (face, func, ref, mask) => gl.stencilFuncSeparate(face, func, ref, mask),
-    glStencilOp: (fail, zfail, zpass) => gl.stencilOp(fail, zfail, zpass),
-    glStencilOpSeparate: (face, sfail, dpfail, dppass) => gl.stencilOpSeparate(face, sfail, dpfail, dppass),
-    glStencilMask: (mask) => gl.stencilMask(mask),
-    glBlendFunc: (sfactor, dfactor) => gl.blendFunc(sfactor, dfactor),
-    glBlendFuncSeparate: (srcRGB, dstRGB, srcA, dstA) => gl.blendFuncSeparate(srcRGB, dstRGB, srcA, dstA),
-    glBlendEquationSeparate: (modeRGB, modeA) => gl.blendEquationSeparate(modeRGB, modeA),
-    glBlendColor: (r, g, b, a) => gl.blendColor(r, g, b, a),
-    glCullFace: (mode) => gl.cullFace(mode),
-    glFrontFace: (mode) => gl.frontFace(mode),
-    glScissor: (x, y, w, h) => gl.scissor(x, y, w, h),
-    glViewport: (x, y, w, h) => gl.viewport(x, y, w, h),
-    glPolygonOffset: (factor, units) => gl.polygonOffset(factor, units),
-
-    // ---- Clear ----
-    glClearBufferfv: (buffer, drawbuffer, ptr) => {
-      const v = new Float32Array(wasmMemory.buffer, ptr, 4);
-      gl.clearBufferfv(buffer, drawbuffer, v);
-    },
-    glClearBufferiv: (buffer, drawbuffer, ptr) => {
-      const v = new Int32Array(wasmMemory.buffer, ptr, 4);
-      gl.clearBufferiv(buffer, drawbuffer, v);
-    },
-    glClearBufferuiv: (buffer, drawbuffer, ptr) => {
-      const v = new Uint32Array(wasmMemory.buffer, ptr, 4);
-      gl.clearBufferuiv(buffer, drawbuffer, v);
-    },
-    glClearBufferfi: (buffer, drawbuffer, depth, stencil) => {
-      gl.clearBufferfi(buffer, drawbuffer, depth, stencil);
-    },
-
-    // ---- Query ----
-    glGetIntegerv: (pname, ptr) => {
-      const ids = getMemI32();
-      ids[ptr >> 2] = gl.getParameter(pname);
-    },
-    glGetError: () => gl.getError(),
-    glGetStringi: (name, index) => {
-      // sokol calls glGetStringi(GL_EXTENSIONS, i) during init
-      // return a pointer to a string in WASM memory
-      const ext = gl.getSupportedExtensions();
-      if (!ext || index >= ext.length) return 0;
-      const str = ext[index];
-      const enc = new TextEncoder();
-      const bytes = enc.encode(str + "\0");
-      const ptr = hostMalloc(bytes.length);
-      getMemU8().set(bytes, ptr);
-      return ptr;
-    },
-
-    // ---- Compute (not available in WebGL2, stubs) ----
-    glDispatchCompute: () => {},
-    glMemoryBarrier: () => {},
-    glBindImageTexture: () => {},
-
-    // ---- Host functions ----
-    host_malloc: (size) => hostMalloc(size),
-    host_free: (ptr) => hostFree(ptr),
-    host_log: (ptr, len) => {
-      console.log("[WASM]", readStrLen(ptr, len));
-    },
-  };
-}
-
-// ============================================================
-// WASM loader and main loop
-// ============================================================
-
-async function main() {
-  const resp = await fetch("triangle.wasm");
-  const bytes = await resp.arrayBuffer();
-
-  // Create WASM memory (initial 256 pages = 16MB, max 1024 pages = 64MB)
-  wasmMemory = new WebAssembly.Memory({ initial: 256, maximum: 1024 });
-
-  const importObj = {
-    env: {
-      memory: wasmMemory,
-      ...buildGLImports(),
-    },
-  };
-
-  const { instance } = await WebAssembly.instantiate(bytes, importObj);
-  wasmInstance = instance;
-
-  // Set heap base to after the data segments
-  // __heap_base is typically exported by the linker
-  if (instance.exports.__heap_base) {
-    heapBase = instance.exports.__heap_base.value;
-  } else {
-    // Fallback: start heap at 1MB
-    heapBase = 1024 * 1024;
-  }
-  heapEnd = wasmMemory.buffer.byteLength;
-
-  // Initial canvas size
-  function resize() {
-    const dpr = window.devicePixelRatio || 1;
-    canvas.width = Math.floor(canvas.clientWidth * dpr);
-    canvas.height = Math.floor(canvas.clientHeight * dpr);
-  }
-  resize();
-  window.addEventListener("resize", resize);
-
-  // Init
-  instance.exports.wasm_init(canvas.width, canvas.height);
-
-  // Frame loop
-  function frame() {
-    resize();
-    instance.exports.wasm_frame(canvas.width, canvas.height);
-    requestAnimationFrame(frame);
-  }
-  requestAnimationFrame(frame);
-}
-
-main().catch(e => {
-  console.error("Failed to start:", e);
-  document.body.innerHTML = `<pre style="color:#f44;padding:2em">${e.stack || e}</pre>`;
-});
-</script>
+    // Start initialization
+    init();
+  </script>
 </body>
+
 </html>

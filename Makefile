@@ -41,21 +41,27 @@ build: triangle-sapp.glsl.h | $(BUILD_DIR)
 		-o $(BUILD_DIR)/triangle
 
 .PHONY: web
-web: triangle-sapp.glsl.h | $(BUILD_DIR)/web
+web: web-wasm web-assets
+
+$(BUILD_DIR)/web/triangle.wasm: web/main.c web/triangle-sapp.glsl.h | $(BUILD_DIR)/web
 	$(call QUIET, @echo "  ZIG CC  triangle.wasm")
 	$(Q)zig build-exe \
-		web/sokol_impl_web.c web/main_web.c \
+		$< \
 		-target wasm32-freestanding \
 		-fno-entry \
 		-rdynamic \
 		-O ReleaseFast \
-		-isystem web/include \
-		-Iweb \
-		-DSOKOL_GLES3 \
-		-DSOKOL_EXTERNAL_GL_LOADER \
-		--import-memory \
-		-femit-bin=$(BUILD_DIR)/web/triangle.wasm
+		-I web/wasm-include \
+		-femit-bin=$@
+
+.PHONY: web-wasm
+web-wasm: $(BUILD_DIR)/web/triangle.wasm
+
+.PHONY: web-assets
+web-assets: | $(BUILD_DIR)/web
+	$(call QUIET, @echo "  COPY    web assets")
 	$(Q)$(CP) web/index.html $(BUILD_DIR)/web/index.html
+	$(Q)$(CP) web/gl-bridge.js $(BUILD_DIR)/web/gl-bridge.js
 
 $(BUILD_DIR):
 	$(Q)$(MKDIR_P) $(BUILD_DIR)
