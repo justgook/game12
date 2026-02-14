@@ -609,15 +609,55 @@ class GLBridge {
     }
 
     glGetIntegerv(pname, data) {
-        const value = this.gl.getParameter(pname);
         const view = new DataView(this.memory.buffer);
+        const gl = this.gl;
         
-        if (Array.isArray(value) || value instanceof Int32Array) {
-            for (let i = 0; i < value.length; i++) {
-                view.setInt32(data + i * 4, value[i], true);
+        // Pre-check unsupported enums to avoid WebGL console errors
+        // These are OpenGL ES 3.0 enums not supported in WebGL2
+        const unsupportedDefaults = {
+            0x821B: 3,    // GL_MAJOR_VERSION (WebGL2 = ES 3.0)
+            0x821C: 0,    // GL_MINOR_VERSION
+            0x821D: 0,    // GL_CONTEXT_FLAGS
+            0x82D9: 16,   // GL_MAX_VERTEX_ATTRIB_BINDINGS
+            0x8A2F: 24,   // GL_MAX_UNIFORM_BUFFER_BINDINGS
+            0x8A2D: 8,    // GL_MAX_COMBINED_UNIFORM_BLOCKS
+            0x8A2E: 8,    // GL_MAX_VERTEX_UNIFORM_BLOCKS
+            0x8A2C: 8,    // GL_MAX_FRAGMENT_UNIFORM_BLOCKS
+            0x8A3C: 1024, // GL_MAX_UNIFORM_BLOCK_SIZE
+            0x919F: 256,  // GL_TEXTURE_BUFFER_OFFSET_ALIGNMENT
+            0x8DF4: 0,    // GL_NUM_EXTENSIONS
+            0x8B4C: 0,    // GL_MAX_COLOR_ATTACHMENTS
+            0x8B4D: 0,    // GL_MAX_SAMPLES
+            0x8824: 8,    // GL_MAX_DRAW_BUFFERS (WebGL2 supports at least 8)
+            0x8B4B: 0,    // GL_MAX_DUAL_SOURCE_DRAW_BUFFERS
+            0x8B4E: 1,    // GL_MAX_COLOR_TEXTURE_SAMPLES
+            0x8B4F: 1,    // GL_MAX_DEPTH_TEXTURE_SAMPLES
+            0x8B50: 1,    // GL_MAX_INTEGER_SAMPLES
+            0x8E8E: 0,    // GL_MAX_VERTEX_STREAMS
+            0x82DE: 0,    // GL_MAX_VERTEX_ATTRIB_RELATIVE_OFFSET
+            0x82D8: 16,   // GL_MAX_VERTEX_ATTRIB_STRIDE
+            0x82E5: 0,    // GL_MAX_ELEMENT_INDEX
+        };
+        
+        if (pname in unsupportedDefaults) {
+            view.setInt32(data, unsupportedDefaults[pname], true);
+            return;
+        }
+        
+        // Wrap in try-catch to catch any remaining unsupported enums
+        try {
+            const value = gl.getParameter(pname);
+            
+            if (Array.isArray(value) || value instanceof Int32Array) {
+                for (let i = 0; i < value.length; i++) {
+                    view.setInt32(data + i * 4, value[i], true);
+                }
+            } else {
+                view.setInt32(data, value || 0, true);
             }
-        } else {
-            view.setInt32(data, value, true);
+        } catch (e) {
+            console.warn(`glGetIntegerv: Unknown unsupported parameter 0x${pname.toString(16)} - add to unsupportedDefaults`);
+            view.setInt32(data, 0, true);
         }
     }
 
@@ -700,7 +740,20 @@ class GLBridge {
     }
 
     glGetString(name) {
-        const str = this.gl.getParameter(name);
+        const gl = this.gl;
+        
+        // Clear any previous errors
+        gl.getError();
+        
+        const str = gl.getParameter(name);
+        const error = gl.getError();
+        
+        if (error === gl.INVALID_ENUM) {
+            // Return empty string for unsupported enums (e.g., GL_EXTENSIONS)
+            console.warn(`glGetString: Unsupported name 0x${name.toString(16)}`);
+            return 0;
+        }
+        
         if (!str) return 0;
         
         // Allocate string in WASM memory (simplified - should use malloc)
