@@ -1,9 +1,10 @@
-#include "sokol_app.h"
-#include "sokol_gfx.h"
-#include "sokol_glue.h"
-#include "sokol_log.h"
+#include "vendor/sokol_app.h"
+#include "vendor/sokol_gfx.h"
+#include "vendor/sokol_log.h"
+
 #include "triangle-sapp.glsl.h"
 
+sg_swapchain get_sokol_swapchain(void); // sglue_swapchain or web variant
 static struct {
   sg_pipeline pip;
   sg_bindings bind;
@@ -11,11 +12,6 @@ static struct {
 } state;
 
 static void init(void) {
-  sg_setup(&(sg_desc){
-      .environment = sglue_environment(),
-      .logger.func = slog_func,
-  });
-
   float vertices[] = {0.0f,  0.5f,  0.5f, 1.0f, 0.0f, 0.0f, 1.0f,
                       0.5f,  -0.5f, 0.5f, 0.0f, 1.0f, 0.0f, 1.0f,
                       -0.5f, -0.5f, 0.5f, 0.0f, 0.0f, 1.0f, 1.0f};
@@ -37,8 +33,8 @@ static void init(void) {
 }
 
 void frame(void) {
-  sg_begin_pass(
-      &(sg_pass){.action = state.pass_action, .swapchain = sglue_swapchain()});
+  sg_begin_pass(&(sg_pass){.action = state.pass_action,
+                           .swapchain = get_sokol_swapchain()});
   sg_apply_pipeline(state.pip);
   sg_apply_bindings(&state.bind);
   sg_draw(0, 3, 1);
@@ -48,19 +44,3 @@ void frame(void) {
 
 void cleanup(void) { sg_shutdown(); }
 static void event(const sapp_event *e) {}
-
-sapp_desc sokol_main(int argc, char *argv[]) {
-  (void)argc;
-  (void)argv;
-  return (sapp_desc){
-      .init_cb = init,
-      .frame_cb = frame,
-      .cleanup_cb = cleanup,
-      .event_cb = event,
-      .width = 640,
-      .height = 480,
-      .window_title = "Triangle",
-      .icon.sokol_default = true,
-      .logger.func = slog_func,
-  };
-}

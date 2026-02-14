@@ -36,7 +36,7 @@ all: build
 build: triangle-sapp.glsl.h | $(BUILD_DIR)
 	$(Q)echo "Bild Native App"
 	$(Q)zig build-exe \
-		sokol_impl.m main.c \
+		osx/sokol_impl.m osx/main.c main.c \
 		-framework Metal -framework MetalKit \
 		-framework Cocoa -framework QuartzCore -framework Foundation \
 		-femit-bin=$(BUILD_DIR)/triangle
