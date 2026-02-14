@@ -22,8 +22,11 @@ CP ?= cp -f
 
 BUILD_DIR ?= build.nosync
 ASSETS_DIR ?= assets
+# Shader header generation (requires sokol-shdc)
+# triangle-sapp.glsl.h: triangle-sapp.glsl
+# 	./sokol-shdc --input triangle-sapp.glsl --output triangle-sapp.glsl.h --slang glsl430:metal_macos:glsl300es
 
-$(BUILD_DIR)/renderer.wasm: main.c | $(BUILD_DIR)
+$(BUILD_DIR)/renderer.wasm: main.c triangle-sapp.glsl.h | $(BUILD_DIR)
 	zig build-exe $< \
 		-target wasm32-freestanding \
 		-I wasm-include \
