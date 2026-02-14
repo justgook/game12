@@ -47,6 +47,7 @@ void frame(void) {
 }
 
 void cleanup(void) { sg_shutdown(); }
+static void event(const sapp_event *e) {}
 
 sapp_desc sokol_main(int argc, char *argv[]) {
   (void)argc;
@@ -55,6 +56,7 @@ sapp_desc sokol_main(int argc, char *argv[]) {
       .init_cb = init,
       .frame_cb = frame,
       .cleanup_cb = cleanup,
+      .event_cb = event,
       .width = 640,
       .height = 480,
       .window_title = "Triangle",
