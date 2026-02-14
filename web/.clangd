@@ -1,0 +1,26 @@
+CompileFlags:
+  Add:
+    - -target
+    - wasm32-unknown-unknown
+    - -nostdlib
+    - -I.
+    - -Iwasm-include
+    - -DSOKOL_GLES3
+    - -DSOKOL_EXTERNAL_GL_LOADER
+    - -DSOKOL_WGPU
+    - -D__wasm__
+    - -D__EMSCRIPTEN__
+    - -isystem/usr/lib/clang/19/include
+  Remove:
+    - -fmodules
+    - -fmodules-cache-path
+
+Index:
+  Background: Build
+
+Diagnostics:
+  UnusedIncludes: None
+  MissingIncludes: None
+
+InlayHints:
+  Enabled: No

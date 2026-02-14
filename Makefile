@@ -44,10 +44,10 @@ build: triangle-sapp.glsl.h | $(BUILD_DIR)
 .PHONY: web
 web: $(BUILD_DIR)/web/triangle.wasm $(BUILD_DIR)/web/index.html $(BUILD_DIR)/web/gl-bridge.js
 
-$(BUILD_DIR)/web/triangle.wasm: web/main.c web/triangle-sapp.glsl.h | $(BUILD_DIR)/web
+$(BUILD_DIR)/web/triangle.wasm: web/main.c main.c | $(BUILD_DIR)/web
 	$(Q)echo "Bild WASM App"
 	$(Q)zig build-exe \
-		$< \
+		$^ \
 		-target wasm32-freestanding \
 		-fno-entry \
 		-rdynamic \
