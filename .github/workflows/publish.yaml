@@ -35,6 +35,9 @@ jobs:
           lfs: true
           fetch-depth: 0
 
+      - name: Setup Zig
+        uses: goto-bus-stop/setup-zig@v2
+
       - name: Build web deployment
         run: make web
 
