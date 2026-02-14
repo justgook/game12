@@ -34,17 +34,17 @@ all: build
 
 .PHONY: build
 build: triangle-sapp.glsl.h | $(BUILD_DIR)
-	$(call QUIET, @echo "  ZIG CC  triangle")
+	$(Q)echo "Bild Native App"
 	$(Q)zig cc sokol_impl.m main.c \
 		-framework Metal -framework MetalKit \
 		-framework Cocoa -framework QuartzCore -framework Foundation \
 		-o $(BUILD_DIR)/triangle
 
 .PHONY: web
-web: web-wasm web-assets
+web: $(BUILD_DIR)/web/triangle.wasm $(BUILD_DIR)/web/index.html $(BUILD_DIR)/web/gl-bridge.js
 
 $(BUILD_DIR)/web/triangle.wasm: web/main.c web/triangle-sapp.glsl.h | $(BUILD_DIR)/web
-	$(call QUIET, @echo "  ZIG CC  triangle.wasm")
+	$(Q)echo "Bild WASM App"
 	$(Q)zig build-exe \
 		$< \
 		-target wasm32-freestanding \
@@ -54,14 +54,11 @@ $(BUILD_DIR)/web/triangle.wasm: web/main.c web/triangle-sapp.glsl.h | $(BUILD_DI
 		-I web/wasm-include \
 		-femit-bin=$@
 
-.PHONY: web-wasm
-web-wasm: $(BUILD_DIR)/web/triangle.wasm
+$(BUILD_DIR)/web/index.html: web/index.html | $(BUILD_DIR)/web
+	$(Q)CP $< $@
 
-.PHONY: web-assets
-web-assets: | $(BUILD_DIR)/web
-	$(call QUIET, @echo "  COPY    web assets")
-	$(Q)$(CP) web/index.html $(BUILD_DIR)/web/index.html
-	$(Q)$(CP) web/gl-bridge.js $(BUILD_DIR)/web/gl-bridge.js
+$(BUILD_DIR)/web/gl-bridge.js: web/gl-bridge.js | $(BUILD_DIR)/web
+	$(Q)CP $< $@
 
 $(BUILD_DIR):
 	$(Q)$(MKDIR_P) $(BUILD_DIR)
@@ -71,8 +68,8 @@ $(BUILD_DIR)/web: | $(BUILD_DIR)
 
 .PHONY: serve
 serve: web
-	$(call QUIET, @echo "  SERVE   http://localhost:8000")
-	$(Q)python3 -m http.server 8000 --directory $(BUILD_DIR)/web
+	$(call QUIET, @echo "  SERVE   http://localhost:8812")
+	$(Q)python3 -m http.server 8812 --directory $(BUILD_DIR)/web
 
 .PHONY: clean
 clean:
