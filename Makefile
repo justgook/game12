@@ -35,10 +35,11 @@ all: build
 .PHONY: build
 build: triangle-sapp.glsl.h | $(BUILD_DIR)
 	$(Q)echo "Bild Native App"
-	$(Q)zig cc sokol_impl.m main.c \
+	$(Q)zig build-exe \
+		sokol_impl.m main.c \
 		-framework Metal -framework MetalKit \
 		-framework Cocoa -framework QuartzCore -framework Foundation \
-		-o $(BUILD_DIR)/triangle
+		-femit-bin=$(BUILD_DIR)/triangle
 
 .PHONY: web
 web: $(BUILD_DIR)/web/triangle.wasm $(BUILD_DIR)/web/index.html $(BUILD_DIR)/web/gl-bridge.js
