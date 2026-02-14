@@ -69,33 +69,28 @@ __attribute__((visibility("default"))) void init(void) {
   // Each vertex: position (3 floats) + color (4 floats) = 7 floats
   float vertices[] = {
       // position (xyz)      color (rgba)
-      0.0f,  0.5f,  0.5f,   1.0f, 0.0f, 0.0f, 1.0f,  // top - red
-      0.5f,  -0.5f, 0.5f,   0.0f, 1.0f, 0.0f, 1.0f,  // bottom right - green
-      -0.5f, -0.5f, 0.5f,   0.0f, 0.0f, 1.0f, 1.0f,  // bottom left - blue
+      0.0f,  0.5f,  0.5f, 1.0f, 0.0f, 0.0f, 1.0f, // top - red
+      0.5f,  -0.5f, 0.5f, 0.0f, 1.0f, 0.0f, 1.0f, // bottom right - green
+      -0.5f, -0.5f, 0.5f, 0.0f, 0.0f, 1.0f, 1.0f, // bottom left - blue
   };
-  
+
   state.bind.vertex_buffers[0] = sg_make_buffer(&(sg_buffer_desc){
-      .data = { .ptr = vertices, .size = sizeof(vertices) },
+      .data = {.ptr = vertices, .size = sizeof(vertices)},
   });
 
   // Create pipeline with shader
   state.pip = sg_make_pipeline(&(sg_pipeline_desc){
       .shader = sg_make_shader(triangle_shader_desc(sg_query_backend())),
-      .layout = {
-          .attrs = {
-              [ATTR_triangle_position].format = SG_VERTEXFORMAT_FLOAT3,
-              [ATTR_triangle_color0].format = SG_VERTEXFORMAT_FLOAT4
-          }
-      },
+      .layout = {.attrs = {[ATTR_triangle_position].format =
+                               SG_VERTEXFORMAT_FLOAT3,
+                           [ATTR_triangle_color0].format =
+                               SG_VERTEXFORMAT_FLOAT4}},
   });
 
   // Configure pass action (clear to black)
-  state.pass_action = (sg_pass_action){
-      .colors[0] = {
-          .load_action = SG_LOADACTION_CLEAR,
-          .clear_value = {0.0f, 0.0f, 0.0f, 1.0f}
-      }
-  };
+  state.pass_action =
+      (sg_pass_action){.colors[0] = {.load_action = SG_LOADACTION_CLEAR,
+                                     .clear_value = {0.0f, 0.0f, 0.0f, 1.0f}}};
 }
 
 // build and return a swapchain struct
@@ -116,18 +111,16 @@ __attribute__((visibility("default"))) void frame(void) {
       .action = state.pass_action,
       .swapchain = get_sokol_swapchain(),
   });
-  
+
   // Apply pipeline and bindings
   sg_apply_pipeline(state.pip);
   sg_apply_bindings(&state.bind);
-  
+
   // Draw the triangle (3 vertices, 1 instance)
   sg_draw(0, 3, 1);
-  
+
   sg_end_pass();
   sg_commit();
 }
 
-__attribute__((visibility("default"))) void cleanup(void) { 
-  sg_shutdown(); 
-}
+__attribute__((visibility("default"))) void cleanup(void) { sg_shutdown(); }
