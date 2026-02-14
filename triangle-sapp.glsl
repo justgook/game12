@@ -4,8 +4,16 @@ in vec4 color0;
 
 out vec4 color;
 
+layout(binding=0) uniform vs_params {
+    float angle;
+};
+
 void main() {
-    gl_Position = position;
+    float s = sin(angle);
+    float c = cos(angle);
+    mat2 rot = mat2(c, -s, s, c);
+    vec2 pos = rot * position.xy;
+    gl_Position = vec4(pos, position.zw);
     color = color0;
 }
 @end
