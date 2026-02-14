@@ -56,10 +56,10 @@ $(BUILD_DIR)/web/triangle.wasm: web/main.c main.c | $(BUILD_DIR)/web
 		-femit-bin=$@
 
 $(BUILD_DIR)/web/index.html: web/index.html | $(BUILD_DIR)/web
-	$(Q)CP $< $@
+	$(Q)$(CP) $< $@
 
 $(BUILD_DIR)/web/gl-bridge.js: web/gl-bridge.js | $(BUILD_DIR)/web
-	$(Q)CP $< $@
+	$(Q)$(CP) $< $@
 
 $(BUILD_DIR):
 	$(Q)$(MKDIR_P) $(BUILD_DIR)
